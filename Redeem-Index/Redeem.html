@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>兑换码</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a1a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .outer {
+      position: relative;
+      background: #111;
+      border: 1px solid #2e2e2e;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 480px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .top {
+      background: #c1705a;
+      border-radius: 10px;
+      height: 180px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .gift-img {
+      position: relative;
+      z-index: 1;
+      height: 130px;
+      width: auto;
+      pointer-events: none;
+    }
+
+    /*  Toast 容器  */
+    .toast-stack {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: #222;
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      padding: 10px 16px;
+      color: #eee;
+      font-size: 13px;
+      white-space: nowrap;
+      pointer-events: none;
+
+      /* 初始：右移隐藏 */
+      opacity: 0;
+      transform: translateX(30px);
+      transition: opacity 0.25s, transform 0.3s;
+    }
+
+    .toast.enter {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .toast.exit {
+      opacity: 0;
+      transform: translateX(30px);
+    }
+
+    .toast--error {
+      background: #1a0a0a;
+      border-color: #c0392b;
+      color: #e74c3c;
+    }
+
+    /*  Bottom input  */
+    .bottom {
+      background: #1e1e1e;
+      border: 1px solid #2e2e2e;
+      border-radius: 10px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      transition: border-color 0.25s;
+    }
+
+    .bottom.error {
+      border-color: #c0392b;
+      animation: shake 0.4s ease;
+    }
+
+    @keyframes shake {
+      0%   { transform: translateX(0); }
+      15%  { transform: translateX(-5px); }
+      35%  { transform: translateX(5px); }
+      55%  { transform: translateX(-4px); }
+      75%  { transform: translateX(4px); }
+      90%  { transform: translateX(-2px); }
+      100% { transform: translateX(0); }
+    }
+
+    .bottom input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #eee;
+      font-size: 14px;
+      font-family: monospace;
+      letter-spacing: 0.06em;
+      text-align: center;
+    }
+
+    .bottom input:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /*  结果展示态  */
+    .bottom.result-mode {
+      cursor: pointer;
+      justify-content: center;
+    }
+
+    .result-code {
+      color: #eee;
+      font-size: 14px;
+      font-family: monospace;
+      letter-spacing: 0.06em;
+      user-select: none;
+    }
+
+    .check-icon {
+      display: none;
+    }
+
+    .bottom.copied {
+      border-color: #5cb87e;
+      background: #0a1a0f;
+      cursor: default;
+      justify-content: center;
+    }
+
+    .bottom.copied .check-icon { display: block;
+       color: #5cb87e;
+    }
+  </style>
+</head>
+<body>
+  <div class="outer">
+    <div class="toast-stack" id="toastStack"></div>
+    <div class="top">
+      <img class="gift-img" src="gift.gif" alt="gift" />
+    </div>
+    <div class="bottom" id="bottomEl" onclick="copyCode()">
+      <input id="inp" type="text" autocomplete="off" spellcheck="false"
+        onkeydown="if(event.key==='Enter') redeem()" />
+      <span class="result-code" id="resultCode"></span>
+      <svg class="check-icon" id="checkIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+  </div>
+
+  <script>
+    /*  Toast 叠层系统  */
+    const MAX_TOASTS  = 3;
+    const TOAST_LIFE  = 3000; // ms 显示时长
+    const EXIT_DUR    = 350;  // ms 退出动画时长（需与 CSS transition 匹配）
+
+    const stack     = document.getElementById('toastStack');
+    const toastList = []; // { el, timerId }
+
+    function showToast(msg, error = false) {
+      const insertToast = () => {
+        const el = document.createElement('div');
+        el.className = 'toast' + (error ? ' toast--error' : '');
+        el.textContent = msg;
+        stack.insertBefore(el, stack.firstChild);
+
+        // 触发入场动画（下一帧生效）
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => el.classList.add('enter'));
+        });
+
+        // 注册自动消失
+        const timerId = setTimeout(() => dismissToast(entry), TOAST_LIFE);
+        const entry = { el, timerId };
+        toastList.push(entry);
+      };
+
+      // 超出上限：等最旧条目退出动画结束后再插入新条目
+      if (toastList.length >= MAX_TOASTS) {
+        const oldest = toastList.shift();
+        clearTimeout(oldest.timerId);
+        oldest.el.classList.remove('enter');
+        oldest.el.classList.add('exit');
+        setTimeout(() => {
+          oldest.el.remove();
+          insertToast();
+        }, EXIT_DUR);
+      } else {
+        insertToast();
+      }
+    }
+
+    function dismissToast(entry) {
+      const idx = toastList.indexOf(entry);
+      if (idx === -1) return;
+      toastList.splice(idx, 1);
+      clearTimeout(entry.timerId);
+
+      entry.el.classList.remove('enter');
+      entry.el.classList.add('exit');
+      setTimeout(() => entry.el.remove(), EXIT_DUR);
+    }
+
+    /*  空输入锁定  */
+    const LOCK_DUR = 1000; // ms
+
+    const inp      = document.getElementById('inp');
+    const bottomEl = document.getElementById('bottomEl');
+    let   locked   = false;
+    let   lockTimer = null;
+
+    function triggerEmptyError() {
+      if (locked) return;
+      locked = true;
+
+      // 失去焦点，禁用输入
+      inp.blur();
+      inp.disabled = true;
+
+      // 红框 + 抖动
+      bottomEl.classList.add('error');
+
+      // 抖动结束后移除 animation class（为下次复用），但保留红框直到解锁
+      bottomEl.addEventListener('animationend', () => {
+        bottomEl.classList.remove('error');
+        // 保留红色边框：用 inline style 维持，解锁时移除
+        bottomEl.style.borderColor = '#c0392b';
+      }, { once: true });
+
+      lockTimer = setTimeout(() => {
+        // 解锁
+        locked = false;
+        inp.disabled = false;
+        bottomEl.style.borderColor = '';
+        inp.focus();
+      }, LOCK_DUR);
+    }
+
+    /*  兑换逻辑  */
+    const resultCode = document.getElementById('resultCode');
+    const checkIcon  = document.getElementById('checkIcon');
+    let   currentCode = '';
+
+    function showResultMode(code) {
+      currentCode = code;
+      inp.style.display = 'none';
+      resultCode.textContent = code;
+      resultCode.style.display = 'block';
+      checkIcon.style.display = 'none';
+      bottomEl.classList.add('result-mode');
+      bottomEl.classList.remove('copied');
+    }
+
+    function restoreInput() {
+      currentCode = '';
+      bottomEl.classList.remove('result-mode', 'copied');
+      resultCode.style.display = 'none';
+      checkIcon.style.display = 'none';
+      inp.style.display = '';
+      inp.value = '';
+      inp.focus();
+    }
+
+    function copyCode() {
+      if (!currentCode || bottomEl.classList.contains('copied')) return;
+      navigator.clipboard.writeText(currentCode).then(() => {
+        bottomEl.classList.add('copied');
+        resultCode.style.display = 'none';
+        checkIcon.style.display = 'block';
+        setTimeout(restoreInput, 1500);
+      });
+    }
+
+    function redeem() {
+      if (locked) return;
+
+      const val = inp.value.trim();
+
+      if (val === '') {
+        triggerEmptyError();
+        showToast('未输入', true);
+        return;
+      }
+
+      if (val === 'end') {
+        showToast('感谢相遇，愿我们在雨中重逢');
+        showResultMode('来生再会');
+      } else {
+        showToast('无效', true);
+        inp.value = '';
+        triggerEmptyError();
+      }
+    }
+
+    inp.focus();
+  </script>
+</body>
+</html>
